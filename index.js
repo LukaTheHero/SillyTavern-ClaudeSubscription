@@ -3,21 +3,33 @@
 // ──────────────────────────────────────────────
 //
 // Exposes an OpenAI-compatible chat-completions API backed by the local
-// Claude Agent SDK. Configure SillyTavern's "Chat Completion → Custom
-// (OpenAI-compatible)" to point at:
-//   http://<sillytavern-host>:<port>/api/plugins/claude-subscription/v1
+// Claude Agent SDK. The chat endpoints run on a *separate* HTTP listener
+// (default 127.0.0.1:8901) so they sit outside SillyTavern's CSRF
+// middleware — SillyTavern's chat-completions backend issues a server-side
+// outbound fetch to the configured Custom Endpoint, and that loopback fetch
+// has no CSRF token, which would be rejected if the route lived under the
+// SillyTavern Express app. See lib/listener.js for the rationale.
 //
-// Routes registered under /api/plugins/claude-subscription/:
-//   GET  /status                — SDK availability probe
-//   GET  /v1/models             — curated Claude model list (OpenAI shape)
-//   POST /v1/chat/completions   — proxy to Claude Agent SDK (stream + JSON)
-//   POST /v1/embeddings         — explicit 501 (mirrors Marinara behavior)
+// Configure SillyTavern's "Chat Completion → Custom (OpenAI-compatible)" to:
+//   http://localhost:8901/v1
+//
+// (Or whichever host:port the listener started on — see startup log.)
+//
+// Override the port/host with env vars before launching SillyTavern:
+//   CLAUDE_SUBSCRIPTION_PORT=8901
+//   CLAUDE_SUBSCRIPTION_HOST=127.0.0.1
+//
+// The plugin also registers /api/plugins/claude-subscription/status on
+// SillyTavern's own router (GET is exempt from CSRF) — useful for a quick
+// in-browser health check that the plugin loaded.
 
 import express from 'express';
 
-import { handleChatCompletions, rejectEmbeddings } from './lib/chat.js';
 import { handleStatus } from './lib/status.js';
-import { listModelsHandler } from './lib/models.js';
+import { startStandaloneListener, stopStandaloneListener } from './lib/listener.js';
+
+const DEFAULT_PORT = 8901;
+const DEFAULT_HOST = '127.0.0.1';
 
 export const info = {
     id: 'claude-subscription',
@@ -29,21 +41,33 @@ export const info = {
 };
 
 export async function init(router) {
-    // SillyTavern hands plugins a fresh express.Router with no body parser;
-    // attach JSON parsing locally. 50mb matches the limit ST uses for chat
-    // completion requests so very long conversations don't get rejected.
+    // /status is the only route on the SillyTavern-mounted router. Browser
+    // can hit http://<sillytavern>/api/plugins/claude-subscription/status to
+    // verify the plugin is loaded; GET is exempt from CSRF so this works.
     router.use(express.json({ limit: '50mb' }));
-
     router.get('/status', handleStatus);
-    router.get('/v1/models', listModelsHandler);
-    router.post('/v1/chat/completions', handleChatCompletions);
-    router.post('/v1/embeddings', rejectEmbeddings);
 
-    console.log(`[${info.id}] initialised — POST /api/plugins/${info.id}/v1/chat/completions`);
+    // Real proxy lives on a separate port outside SillyTavern's Express app.
+    const port = parseInt(process.env.CLAUDE_SUBSCRIPTION_PORT, 10) || DEFAULT_PORT;
+    const host = process.env.CLAUDE_SUBSCRIPTION_HOST || DEFAULT_HOST;
+
+    try {
+        await startStandaloneListener({ port, host });
+        console.log(
+            `[${info.id}] initialised — set SillyTavern Custom Endpoint to http://${host}:${port}/v1`,
+        );
+    } catch (err) {
+        console.error(
+            `[${info.id}] failed to start standalone listener — chat completions will not work. ` +
+            'Status endpoint on /api/plugins/claude-subscription/status remains available.',
+            err,
+        );
+    }
 }
 
 export async function exit() {
-    console.log(`[${info.id}] shutting down`);
+    await stopStandaloneListener();
+    console.log(`[${info.id}] shut down`);
 }
 
 export default { info, init, exit };

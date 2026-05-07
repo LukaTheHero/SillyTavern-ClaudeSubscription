@@ -43,8 +43,20 @@ npm install
 …then restart SillyTavern. You should see this in the server log:
 
 ```
-[claude-subscription] initialised — POST /api/plugins/claude-subscription/v1/chat/completions
+[claude-subscription] standalone listener: http://127.0.0.1:8901/v1 (point SillyTavern Custom Endpoint here)
+[claude-subscription] initialised — set SillyTavern Custom Endpoint to http://127.0.0.1:8901/v1
 ```
+
+> **Why a separate port?** SillyTavern wraps its Express app in CSRF
+> protection. When SillyTavern's chat-completions backend issues a
+> server-side outbound fetch to the URL you put in "Custom Endpoint", that
+> loopback fetch has no CSRF token. If the route lived under
+> `/api/plugins/...` it would be rejected with `403 Forbidden`. Listening
+> on a separate port sidesteps that middleware entirely.
+
+> **Port already in use?** Override the listener with environment variables
+> before launching SillyTavern: `CLAUDE_SUBSCRIPTION_PORT=8902` (default
+> `8901`) and/or `CLAUDE_SUBSCRIPTION_HOST=127.0.0.1`.
 
 > **Local development install:** if you cloned the repo into `plugins/`
 > manually instead of using `node plugins.js install`, just run
@@ -59,9 +71,10 @@ npm install
    **Custom (OpenAI-compatible)**.
 3. **Custom Endpoint (Base URL):**
    ```
-   http://localhost:8000/api/plugins/claude-subscription/v1
+   http://localhost:8901/v1
    ```
-   *(replace host/port if your SillyTavern listens elsewhere)*
+   *(or whichever host/port appears in the plugin's startup log line:
+   `[claude-subscription] standalone listener: ...`)*
 4. **Custom API Key:** any non-empty placeholder — the proxy ignores it.
    `sk-no-key` works.
 5. Click **Connect**. The model dropdown will populate from the curated
@@ -86,19 +99,30 @@ subscription auth is unavailable. Leave the field blank (or set
 
 ## Endpoints
 
-All under `/api/plugins/claude-subscription/`:
+The chat completion endpoints live on a separate port (default `8901`)
+because SillyTavern's CSRF protection blocks server-side loopback POSTs
+to `/api/plugins/*`. The status route is also exposed on SillyTavern's
+own router (GET, CSRF-exempt) so a browser can verify the plugin loaded.
 
-| Method | Path                  | Purpose                                       |
-| ------ | --------------------- | --------------------------------------------- |
-| GET    | `/status`             | SDK availability probe                        |
-| GET    | `/v1/models`          | Curated Claude model list (OpenAI shape)      |
-| POST   | `/v1/chat/completions`| Proxy → Claude Agent SDK (SSE + JSON)         |
-| POST   | `/v1/embeddings`      | Returns `501` — embeddings not supported      |
+**Standalone listener (the URL you point Custom Endpoint at):**
+
+| Method | URL                                            | Purpose                                  |
+| ------ | ---------------------------------------------- | ---------------------------------------- |
+| GET    | `http://127.0.0.1:8901/status`                 | SDK availability probe                   |
+| GET    | `http://127.0.0.1:8901/v1/models`              | Curated Claude model list (OpenAI shape) |
+| POST   | `http://127.0.0.1:8901/v1/chat/completions`    | Proxy → Claude Agent SDK (SSE + JSON)    |
+| POST   | `http://127.0.0.1:8901/v1/embeddings`          | Returns `501` — embeddings not supported |
+
+**On SillyTavern's app (browser-reachable health check only):**
+
+| Method | URL                                                                  |
+| ------ | -------------------------------------------------------------------- |
+| GET    | `http://<sillytavern>/api/plugins/claude-subscription/status`        |
 
 Quick sanity check from the SillyTavern host:
 
 ```
-curl http://localhost:8000/api/plugins/claude-subscription/status
+curl http://localhost:8901/status
 ```
 
 ---
