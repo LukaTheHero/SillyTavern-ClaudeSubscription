@@ -1,185 +1,170 @@
 # SillyTavern — Claude (Subscription) Proxy
 
-A SillyTavern **Server Plugin** that lets you use your **Anthropic Pro / Max
-subscription** for chat instead of paying for API credits. Routes requests
-through the locally-installed [Claude Agent SDK][sdk], the same mechanism
-Visual Studio Code, Cursor, and Zed use for subscription-billed access.
-
-It exposes an OpenAI-compatible chat-completions endpoint under your
-SillyTavern server, so you point SillyTavern's **Chat Completion → Custom
-(OpenAI-compatible)** source at it.
+Use your **Anthropic Pro / Max subscription** for SillyTavern chat instead of
+paying for API credits. A SillyTavern **Server Plugin** routes requests
+through the locally-installed [Claude Agent SDK][sdk] — the same subscription
+mechanism VS Code, Cursor, and Zed use — and ships with a companion
+**"Claude Max" UI extension** for one-click connection and Claude-native
+settings.
 
 [sdk]: https://docs.anthropic.com/en/docs/claude-code/sdk
 
----
+## What v2 gives you
+
+- **Current models** — Claude Fable 5, Opus 4.8/4.7/4.6/4.5, Sonnet 4.6/4.5,
+  Haiku 4.5, plus explicit **"(1M context)"** variants for the tiers that
+  support extended context.
+- **One-click connect** — the Claude Max panel (Extensions drawer) configures
+  SillyTavern's Custom endpoint for you. No URLs to paste.
+- **Claude-native reasoning effort** — `low / medium / high / xhigh / max`,
+  set in the Claude Max panel. SillyTavern's built-in Reasoning Effort
+  dropdown does **not** work for Claude models on Custom endpoints (its
+  "Maximum" is downgraded to `high` client-side, and the field is dropped
+  server-side for non-OpenAI model IDs) — this panel bypasses all of that.
+- **Thinking display** — Claude's reasoning streams into SillyTavern's native
+  collapsible "thoughts" block (`reasoning_content`). Toggle in the panel;
+  also enable "Show model thoughts" in ST's settings.
+- **Real multi-turn context** — chat history is replayed as a genuine Claude
+  session (synthetic session resume), not folded into one giant string:
+  proper role separation, working prompt caching, better long-RP quality.
+- **Roleplay isolation** — no coding system prompt, no host CLAUDE.md /
+  settings / MCP connectors leaking into your scenes, no agent tools. Your
+  character card and world info are the entire system prompt.
+- **Stop sequences enforced** — the Agent SDK has none, so the plugin scans
+  the stream server-side (`\n{{user}}:` guards work as expected).
+- **Resilience** — automatic OAuth token refresh, rate-limit retries,
+  1M-context → base-model fallback with a one-hour probe cooldown.
+- **Quota meter** — live 5-hour / 7-day subscription window utilization in
+  the panel, so a long session never hits a surprise lockout.
+- **Privacy sweep** — the transcript the Claude CLI writes for each live turn
+  is deleted after the request; your roleplay does not persist in plaintext
+  under `~/.claude/projects`.
 
 ## Prerequisites
 
 On the same machine SillyTavern runs on:
 
-1. **Install Claude Code** (the SDK shells out to its CLI):
+1. **Sign in once** with your Pro / Max account (installs nothing into ST):
    ```
    npm i -g @anthropic-ai/claude-code
-   ```
-2. **Sign in once** with your Pro / Max account:
-   ```
    claude login
    ```
-3. SillyTavern's `config.yaml` must have `enableServerPlugins: true` (already
-   the default in recent versions).
-
----
+   (Headless / Docker: generate a token with `claude setup-token` and set
+   `CLAUDE_CODE_OAUTH_TOKEN` instead.)
+2. SillyTavern `config.yaml`: `enableServerPlugins: true`.
 
 ## Install
 
 From your SillyTavern install directory (the one containing `server.js`):
 
 ```
-node plugins.js install https://github.com/<you>/sillytavern-claude-subscription
-cd plugins/sillytavern-claude-subscription
+node plugins.js install https://github.com/LukaTheHero/SillyTavern-ClaudeSubscription
+cd plugins/SillyTavern-ClaudeSubscription
 npm install
 ```
 
-…then restart SillyTavern. You should see this in the server log:
+Restart SillyTavern. The server log should show:
 
 ```
-[claude-subscription] standalone listener: http://127.0.0.1:8901/v1 (point SillyTavern Custom Endpoint here)
-[claude-subscription] initialised — set SillyTavern Custom Endpoint to http://127.0.0.1:8901/v1
+[claude-subscription] installed UI extension v2.0.0 at public/scripts/extensions/third-party/SillyTavern-ClaudeMax
+[claude-subscription] standalone listener: http://127.0.0.1:8901/v1
+[claude-subscription] initialised — endpoint http://127.0.0.1:8901/v1
 ```
 
-> **Why a separate port?** SillyTavern wraps its Express app in CSRF
-> protection. When SillyTavern's chat-completions backend issues a
-> server-side outbound fetch to the URL you put in "Custom Endpoint", that
-> loopback fetch has no CSRF token. If the route lived under
-> `/api/plugins/...` it would be rejected with `403 Forbidden`. Listening
-> on a separate port sidesteps that middleware entirely.
+> The companion **Claude Max** UI extension is installed/updated
+> automatically on startup. Hard-refresh the browser (Ctrl+F5) after the
+> first install so SillyTavern loads it. Opt out with
+> `CLAUDE_SUBSCRIPTION_NO_UI_INSTALL=1` and copy `extension/` manually.
 
-> **Port already in use?** Override the listener with environment variables
-> before launching SillyTavern: `CLAUDE_SUBSCRIPTION_PORT=8902` (default
-> `8901`) and/or `CLAUDE_SUBSCRIPTION_HOST=127.0.0.1`.
+## Connect
 
-> **Local development install:** if you cloned the repo into `plugins/`
-> manually instead of using `node plugins.js install`, just run
-> `npm install` inside the plugin directory and restart.
+1. Open the **Extensions** drawer → **Claude Max**.
+2. Click **Connect to Claude Max**.
+3. Pick a model from the normal model dropdown (e.g. *Claude Fable 5* or
+   *Claude Opus 4.8 (1M context)*).
+4. Chat.
 
----
+Set effort/thinking in the same panel — changes apply from the next message,
+no reconnect needed.
 
-## Configure SillyTavern
+### Settings reference (Claude Max panel)
 
-1. Open SillyTavern in your browser.
-2. **API Connections** → set **Chat Completion Source** to
-   **Custom (OpenAI-compatible)**.
-3. **Custom Endpoint (Base URL):**
-   ```
-   http://localhost:8901/v1
-   ```
-   *(or whichever host/port appears in the plugin's startup log line:
-   `[claude-subscription] standalone listener: ...`)*
-4. **Custom API Key:** any non-empty placeholder — the proxy ignores it.
-   `sk-no-key` works.
-5. Click **Connect**. The model dropdown will populate from the curated
-   subscription list (Opus 4.7, Opus 4.6, Sonnet 4.6, Opus 4.5, Sonnet 4.5,
-   Haiku 4.5).
-6. Pick a model. Send a message.
+| Setting | Default | Notes |
+| --- | --- | --- |
+| Reasoning effort | Auto | `low → max`; Auto sends nothing (model default, ≈high). `xhigh`/`max` think longer and deeper. |
+| Thinking mode | Adaptive | Adaptive lets the model decide when to think. Opus 4.7+/Fable always think regardless. |
+| Show reasoning | On | Streams thinking into ST's collapsible thoughts block. |
+| Identity mode | Off | Prepends the Claude Code preamble so the model self-identifies correctly when asked. Costs tokens and adds coding framing — leave off for RP. |
+| Session resume | On | Real multi-turn replay. Off = v1 fold-to-string behavior (troubleshooting only). |
 
-> Anthropic gates which models each plan tier can use; if your subscription
-> can't run the model you picked, the SDK will return a clear error.
+### Known limitations (Agent SDK)
 
----
+- **Temperature / Top-P / Top-K are not supported** on the subscription path
+  — the Agent SDK exposes no sampling controls. (Adaptive-thinking models
+  reject them anyway.)
+- **Assistant prefill is emulated**: a trailing assistant message ("Start
+  Reply With", continue) becomes a continuation instruction rather than true
+  Messages-API prefill. Works well in practice; the model occasionally
+  paraphrases instead of continuing verbatim.
+- Embeddings return `501` — use a separate embedding source.
 
-## Optional — opt into API billing as a fallback
+## Environment overrides
 
-If you set a real `sk-ant-*` API key in SillyTavern's Custom API Key field,
-the proxy forwards it as `ANTHROPIC_API_KEY` to the SDK. The SDK then bills
-that key instead of your subscription. Useful as a safety net when
-subscription auth is unavailable. Leave the field blank (or set
-`sk-no-key`) to use subscription billing.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CLAUDE_SUBSCRIPTION_PORT` | `8901` | Listener port |
+| `CLAUDE_SUBSCRIPTION_HOST` | `127.0.0.1` | Listener host |
+| `CLAUDE_SUBSCRIPTION_USE_RESUME` | `1` | `0` forces the fold path |
+| `CLAUDE_SUBSCRIPTION_MAX_TURNS` | `1` | SDK maxTurns |
+| `CLAUDE_SUBSCRIPTION_CLAUDE_PATH` | – | Explicit `claude` executable path |
+| `CLAUDE_SUBSCRIPTION_NO_UI_INSTALL` | – | `1` skips UI-extension auto-install |
 
----
+> Changing the port or host? Update **Endpoint (advanced)** in the Claude Max
+> panel to the new `http://<host>:<port>/v1` before clicking **Connect** —
+> the panel's Connect button, per-request settings injection, and quota meter
+> all use that stored endpoint.
 
 ## Endpoints
 
-The chat completion endpoints live on a separate port (default `8901`)
-because SillyTavern's CSRF protection blocks server-side loopback POSTs
-to `/api/plugins/*`. The status route is also exposed on SillyTavern's
-own router (GET, CSRF-exempt) so a browser can verify the plugin loaded.
+| Method | URL | Purpose |
+| --- | --- | --- |
+| GET | `http://127.0.0.1:8901/status` | SDK + credential health |
+| GET | `http://127.0.0.1:8901/v1/models` | Model list (incl. 1M variants) |
+| GET | `http://127.0.0.1:8901/v1/usage/quota` | Subscription window utilization |
+| POST | `http://127.0.0.1:8901/v1/chat/completions` | Chat (SSE + JSON) |
+| POST | `http://127.0.0.1:8901/v1/embeddings` | Always `501` |
+| GET | `http://<sillytavern>/api/plugins/claude-subscription/status` | Browser health check |
 
-**Standalone listener (the URL you point Custom Endpoint at):**
+Direct API users: the plugin accepts the standard `reasoning_effort` body
+field, or a `claude_subscription: { effort, thinking, thinking_budget,
+show_reasoning, identity_mode, use_resume }` object for full control.
+`thinking_budget` (tokens) only applies when `thinking: "on"` and the model
+is not adaptive-only (Opus 4.7+/Fable ignore it); it is clamped to ≥ 1024
+and ≤ `max_tokens − 512`.
 
-| Method | URL                                            | Purpose                                  |
-| ------ | ---------------------------------------------- | ---------------------------------------- |
-| GET    | `http://127.0.0.1:8901/status`                 | SDK availability probe                   |
-| GET    | `http://127.0.0.1:8901/v1/models`              | Curated Claude model list (OpenAI shape) |
-| POST   | `http://127.0.0.1:8901/v1/chat/completions`    | Proxy → Claude Agent SDK (SSE + JSON)    |
-| POST   | `http://127.0.0.1:8901/v1/embeddings`          | Returns `501` — embeddings not supported |
+## API-billing fallback (optional)
 
-**On SillyTavern's app (browser-reachable health check only):**
-
-| Method | URL                                                                  |
-| ------ | -------------------------------------------------------------------- |
-| GET    | `http://<sillytavern>/api/plugins/claude-subscription/status`        |
-
-Quick sanity check from the SillyTavern host:
-
-```
-curl http://localhost:8901/status
-```
-
----
-
-## Behavior — what mirrors Marinara
-
-This plugin is a near-1:1 port of the
-[`ClaudeSubscriptionProvider`](https://github.com/Pasta-Devs/Marinara-Engine/blob/main/packages/server/src/services/llm/providers/claude-subscription.provider.ts)
-introduced in Marinara PR #243, plus the follow-up fixes from #246, #294, and
-#362. Concretely:
-
-- **Lazy SDK load** with cached promise; failure throws a friendly "install
-  Claude Code + `claude login`" error.
-- **Transcript rendering** — system messages → `systemPrompt`, user/assistant
-  turns folded into a labelled prompt. Empty-prompt safety net injects a
-  minimal `User: [Start]` turn.
-- **Built-in agent tools disabled** (`tools: []`,
-  `permissionMode: 'bypassPermissions'`) — SillyTavern owns the conversation
-  surface.
-- **No `maxTurns`** — see Marinara PR #294: internal thinking steps consume
-  turn budget alongside the assistant response, so capping at 1 caused
-  `error_max_turns`.
-- **Adaptive thinking** auto-enabled for Opus 4.7+ (always-thinking family);
-  honored for other models when the request includes a `reasoning_effort`.
-- **API-key fallback** via `ANTHROPIC_API_KEY` env when an
-  `Authorization: Bearer <key>` header is supplied with a real key.
-- **Embeddings rejected** — configure a separate embedding source.
-
-OpenAI-format streaming SSE is emitted for `stream: true` (the SillyTavern
-default for chat completions); `stream: false` returns a single JSON
-response.
-
----
+Enter a real `sk-ant-*` key as the Custom API key and the plugin forwards it
+as `ANTHROPIC_API_KEY` — billing that key instead of the subscription.
+Anything else in the key field is ignored (subscription auth).
 
 ## Troubleshooting
 
-**`Failed to load @anthropic-ai/claude-agent-sdk` on first request**
-You skipped `npm install` inside the plugin directory, or Claude Code isn't
-installed on the host. Re-run the prerequisites and restart SillyTavern.
+**"Failed to load @anthropic-ai/claude-agent-sdk"** — run `npm install`
+inside the plugin directory (without `--omit=optional`; the Claude CLI ships
+inside the SDK as a platform package) and restart SillyTavern.
 
-**`Claude (Subscription) request failed: ... not authenticated`**
-Run `claude login` on the SillyTavern host (the one running `server.js`),
-not on your remote / browsing machine. The credentials live in the SDK's
-local store on that host.
+**Auth errors mid-chat** — the plugin auto-refreshes the OAuth token once per
+request; if it still fails, run `claude login` on the SillyTavern host **as
+the same OS user** that runs `server.js`.
 
-**SillyTavern reports `model not found`**
-The SillyTavern UI may cache the model list. Click **Connect** again or
-reload the page. The plugin's `/v1/models` endpoint always returns the
-curated list.
+**Model list didn't populate** — click Connect again; check
+`http://127.0.0.1:8901/status` in a browser.
 
-**`error_max_turns`**
-You're on an older version of the plugin that still sets `maxTurns: 1`.
-Pull the latest — internal thinking steps consume turn budget so the cap
-needs to be removed (see Marinara PR #294).
-
----
+**1M variant quietly serving 200k** — extended context needs Extra Usage on
+some plans; after one failure the plugin serves the base model for an hour,
+then probes again. Watch the server log for the cooldown message.
 
 ## License
 
-[GNU Affero General Public License v3.0 or later](LICENSE).
+[GNU AGPL v3.0 or later](LICENSE).

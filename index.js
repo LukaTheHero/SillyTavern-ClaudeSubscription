@@ -1,60 +1,125 @@
 // ──────────────────────────────────────────────
-// SillyTavern Server Plugin — Claude (Subscription) Proxy
+// SillyTavern Server Plugin — Claude (Subscription) Proxy v2
 // ──────────────────────────────────────────────
 //
 // Exposes an OpenAI-compatible chat-completions API backed by the local
-// Claude Agent SDK. The chat endpoints run on a *separate* HTTP listener
-// (default 127.0.0.1:8901) so they sit outside SillyTavern's CSRF
-// middleware — SillyTavern's chat-completions backend issues a server-side
-// outbound fetch to the configured Custom Endpoint, and that loopback fetch
-// has no CSRF token, which would be rejected if the route lived under the
-// SillyTavern Express app. See lib/listener.js for the rationale.
+// Claude Agent SDK, billing against an Anthropic Pro/Max subscription. The
+// chat endpoints run on a *separate* HTTP listener (default 127.0.0.1:8901)
+// so they sit outside SillyTavern's CSRF middleware — see lib/listener.js.
 //
-// Configure SillyTavern's "Chat Completion → Custom (OpenAI-compatible)" to:
-//   http://localhost:8901/v1
+// v2 additions:
+//   • Companion UI extension ("Claude Max") is auto-installed/updated into
+//     SillyTavern's third-party extensions on startup — it provides one-click
+//     connection (no URL typing), Claude-native reasoning-effort control
+//     (low/medium/high/xhigh/max), thinking display, and a quota meter.
+//   • Fable 5 / Opus 4.8 / explicit "(1M context)" model variants.
+//   • Synthetic-session resume (real multi-turn context + prompt caching).
+//   • OAuth auto-refresh, rate-limit retries, Extra-Usage fallback.
 //
-// (Or whichever host:port the listener started on — see startup log.)
-//
-// Override the port/host with env vars before launching SillyTavern:
-//   CLAUDE_SUBSCRIPTION_PORT=8901
-//   CLAUDE_SUBSCRIPTION_HOST=127.0.0.1
-//
-// The plugin also registers /api/plugins/claude-subscription/status on
-// SillyTavern's own router (GET is exempt from CSRF) — useful for a quick
-// in-browser health check that the plugin loaded.
+// Env overrides:
+//   CLAUDE_SUBSCRIPTION_PORT=8901       listener port
+//   CLAUDE_SUBSCRIPTION_HOST=127.0.0.1  listener host
+//   CLAUDE_SUBSCRIPTION_USE_RESUME=0    force the v1 transcript-fold path
+//   CLAUDE_SUBSCRIPTION_MAX_TURNS=N     SDK maxTurns override (default 1)
+//   CLAUDE_SUBSCRIPTION_CLAUDE_PATH=…   explicit claude executable
+//   CLAUDE_SUBSCRIPTION_NO_UI_INSTALL=1 skip the UI-extension auto-install
 
 import express from 'express';
+import { cpSync, existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { handleStatus } from './lib/status.js';
+import { handleQuota } from './lib/oauth.js';
 import { startStandaloneListener, stopStandaloneListener } from './lib/listener.js';
 
 const DEFAULT_PORT = 8901;
 const DEFAULT_HOST = '127.0.0.1';
+const UI_EXTENSION_DIR_NAME = 'SillyTavern-ClaudeMax';
 
 export const info = {
     id: 'claude-subscription',
     name: 'Claude (Subscription) Proxy',
     description:
         'Routes chat through the local Claude Agent SDK so it bills against your Anthropic Pro / Max ' +
-        'subscription instead of an sk-ant-* API key. Same auth mechanism Visual Studio Code, Cursor, ' +
-        'and Zed use. Requires Claude Code on the host (`npm i -g @anthropic-ai/claude-code` + `claude login`).',
+        'subscription instead of an sk-ant-* API key. Fable 5 / Opus 4.8 / 1M context / reasoning ' +
+        'effort / thinking display / quota meter. Pairs with the auto-installed "Claude Max" UI extension.',
 };
 
+/** true if dotted version a is strictly newer than b (numeric compare). */
+function isNewerVersion(a, b) {
+    const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+    const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const x = pa[i] ?? 0;
+        const y = pb[i] ?? 0;
+        if (x !== y) return x > y;
+    }
+    return false;
+}
+
+/**
+ * Install or update the companion UI extension into SillyTavern's
+ * third-party extensions directory. The plugin runs in-process inside
+ * SillyTavern (plugins/<id>/), so the public directory is two levels up.
+ * Version-gated: only copies when missing or strictly older — a manually
+ * updated (newer) extension is never downgraded.
+ */
+function installUiExtension() {
+    if (/^(1|true|yes|on)$/i.test(process.env.CLAUDE_SUBSCRIPTION_NO_UI_INSTALL ?? '')) return;
+
+    try {
+        const here = dirname(fileURLToPath(import.meta.url));
+        const source = join(here, 'extension');
+        if (!existsSync(join(source, 'manifest.json'))) return;
+
+        const stRoot = resolve(here, '..', '..');
+        const thirdParty = join(stRoot, 'public', 'scripts', 'extensions', 'third-party');
+        if (!existsSync(thirdParty)) {
+            console.warn(`[${info.id}] SillyTavern third-party extension dir not found at ${thirdParty} — install the UI extension manually (see README).`);
+            return;
+        }
+
+        const target = join(thirdParty, UI_EXTENSION_DIR_NAME);
+        const srcVersion = JSON.parse(readFileSync(join(source, 'manifest.json'), 'utf8')).version ?? '0.0.0';
+        let installedVersion = null;
+        if (existsSync(join(target, 'manifest.json'))) {
+            try {
+                installedVersion = JSON.parse(readFileSync(join(target, 'manifest.json'), 'utf8')).version ?? '0.0.0';
+            } catch { /* corrupted manifest → reinstall */ }
+        }
+
+        if (installedVersion !== null && !isNewerVersion(srcVersion, installedVersion)) return;
+
+        cpSync(source, target, { recursive: true });
+        console.log(
+            `[${info.id}] ${installedVersion ? `updated UI extension ${installedVersion} → ${srcVersion}` : `installed UI extension v${srcVersion}`} ` +
+            `at public/scripts/extensions/third-party/${UI_EXTENSION_DIR_NAME} (hard-refresh the browser to load it)`,
+        );
+    } catch (err) {
+        console.warn(`[${info.id}] UI extension auto-install failed:`, err instanceof Error ? err.message : err);
+    }
+}
+
 export async function init(router) {
-    // /status is the only route on the SillyTavern-mounted router. Browser
-    // can hit http://<sillytavern>/api/plugins/claude-subscription/status to
-    // verify the plugin is loaded; GET is exempt from CSRF so this works.
+    // SillyTavern-mounted routes (GET is CSRF-exempt): /status for browser
+    // health checks, /quota so the UI extension can read quota SAME-ORIGIN —
+    // a direct browser fetch to 127.0.0.1:8901 resolves to the CLIENT device
+    // and fails whenever SillyTavern is browsed from a phone/another PC.
     router.use(express.json({ limit: '50mb' }));
     router.get('/status', handleStatus);
+    router.get('/quota', handleQuota);
 
-    // Real proxy lives on a separate port outside SillyTavern's Express app.
+    installUiExtension();
+
     const port = parseInt(process.env.CLAUDE_SUBSCRIPTION_PORT, 10) || DEFAULT_PORT;
     const host = process.env.CLAUDE_SUBSCRIPTION_HOST || DEFAULT_HOST;
 
     try {
         await startStandaloneListener({ port, host });
         console.log(
-            `[${info.id}] initialised — set SillyTavern Custom Endpoint to http://${host}:${port}/v1`,
+            `[${info.id}] initialised — endpoint http://${host}:${port}/v1 ` +
+            '(use the "Claude Max" panel in the Extensions drawer to connect)',
         );
     } catch (err) {
         console.error(

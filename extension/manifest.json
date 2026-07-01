@@ -1,0 +1,12 @@
+{
+    "display_name": "Claude Max",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "LukaTheHero",
+    "version": "2.0.0",
+    "homePage": "https://github.com/LukaTheHero/SillyTavern-ClaudeSubscription",
+    "auto_update": false
+}
