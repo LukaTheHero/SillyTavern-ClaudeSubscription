@@ -234,6 +234,15 @@
         return wrap;
     }
 
+    /** Always-visible explanation paragraph (tooltips are hover-only and
+     *  nobody finds them). */
+    function makeHelp(text) {
+        const p = document.createElement('small');
+        p.classList.add('claude-max-help');
+        p.textContent = text;
+        return p;
+    }
+
     function addExtensionSettings(settings) {
         const container = document.getElementById('extensions_settings') ?? document.body;
 
@@ -256,9 +265,15 @@
         const connectBtn = document.createElement('div');
         connectBtn.classList.add('menu_button', 'claude-max-connect');
         connectBtn.textContent = 'Connect to Claude Max';
-        connectBtn.title = 'Switches the API to Chat Completion → Custom and points it at the local Claude subscription proxy. Pick a model from the regular model dropdown afterwards.';
         connectBtn.addEventListener('click', () => connect(getSettings()));
         content.append(connectBtn);
+        content.append(makeHelp(
+            'One click does the whole setup: switches the API to Chat Completion → Custom (OpenAI-compatible), ' +
+            'fills the endpoint below into "Custom Endpoint (Base URL)", and connects. When the model list ' +
+            'populates, pick whichever Claude you want — "(1M context)" variants give the extended window. ' +
+            'Prefer manual setup? API Connections → Chat Completion → source "Custom (OpenAI-compatible)" → ' +
+            'paste the endpoint below as the Base URL → Connect → choose a model.',
+        ));
 
         const endpointLabel = document.createElement('label');
         endpointLabel.classList.add('claude-max-label');
@@ -283,6 +298,11 @@
             { auto: 'Auto (model default)', xhigh: 'xhigh (deeper)', max: 'max (deepest)' },
         );
         content.append(effortLabel, effortSelect);
+        content.append(makeHelp(
+            'How hard Claude reasons before replying — low is fastest, max thinks longest and deepest. ' +
+            'Auto sends nothing (the model\'s default, roughly "high"). Applies from your next message. ' +
+            'Higher effort = better plot consistency on complex scenes, but slower replies and more quota.',
+        ));
 
         const [thinkLabel, thinkSelect] = makeSelectRow(
             'Thinking mode', 'claudeMaxThinking', VALID_THINKING, settings.thinking,
@@ -290,18 +310,46 @@
             { adaptive: 'Adaptive (model decides — recommended)', on: 'Always on', off: 'Off (ignored by always-thinking models)' },
         );
         content.append(thinkLabel, thinkSelect);
+        content.append(makeHelp(
+            'Whether Claude uses extended thinking at all. Adaptive: the model thinks only when a message ' +
+            'warrants it — no latency tax on simple exchanges. Always on: every reply is preceded by thinking. ' +
+            'Off: no thinking (note: Fable 5 and Opus 4.7+ ALWAYS think — this setting can\'t disable it there, ' +
+            'and thinking is auto-disabled on other models when Max response length is under 2048 tokens).',
+        ));
 
         content.append(makeCheckboxRow('Show reasoning (collapsible thinking box)', 'claudeMaxShowReasoning', settings.showReasoning, (v) => {
             settings.showReasoning = v; saveSettingsDebounced();
-        }, 'Streams thinking as reasoning_content. Also enable "Show model thoughts" in ST settings.'));
+        }));
+        content.append(makeHelp(
+            'Display toggle only — it does not change whether the model thinks. ON: the thinking summary ' +
+            'streams into SillyTavern\'s collapsible "thoughts" box above the reply (also enable "Show model ' +
+            'thoughts" in ST\'s user settings to see it). OFF: thinking stays hidden. Either way it is never ' +
+            'added to chat history or re-sent as context.',
+        ));
 
         content.append(makeCheckboxRow('Identity mode (Claude Code preamble)', 'claudeMaxIdentity', settings.identityMode, (v) => {
             settings.identityMode = v; saveSettingsDebounced();
-        }, 'Keeps the coding system prompt so the model self-identifies correctly. Costs tokens and adds coding framing — leave OFF for roleplay.'));
+        }));
+        content.append(makeHelp(
+            'OFF (recommended): your character card / persona / world info is the ENTIRE system prompt — ' +
+            'nothing else frames the model. ON: prepends Anthropic\'s official Claude Code preamble before your ' +
+            'card, the same framing the claude CLI uses. Only reason to turn it on: without it, Claude models ' +
+            'lose self-awareness of which model they are (ask "are you Opus or Sonnet?" and they guess wrong). ' +
+            'It costs extra prompt tokens and leaks a coding-assistant flavor into roleplay, so leave it off ' +
+            'unless correct self-identification matters to you.',
+        ));
 
         content.append(makeCheckboxRow('Session resume (multi-turn context + caching)', 'claudeMaxResume', settings.useResume, (v) => {
             settings.useResume = v; saveSettingsDebounced();
-        }, 'Replays chat history as a real Claude session instead of one folded string. Disable only for troubleshooting.'));
+        }));
+        content.append(makeHelp(
+            'How your chat history reaches Claude. ON (recommended): each request replays the chat as a real ' +
+            'multi-turn Claude session — genuine user/assistant turns, which tracks who-said-what better and ' +
+            'lets Anthropic\'s prompt caching work (faster replies, less of your 5-hour/weekly quota burned on ' +
+            're-reading old context). Swipes and edits are handled naturally since history is rebuilt every ' +
+            'message. OFF: the whole chat is flattened into one "User:… / Assistant:…" text block — works, but ' +
+            'weaker turn awareness and no caching. Turn off only when troubleshooting.',
+        ));
 
         const quotaHeader = document.createElement('div');
         quotaHeader.classList.add('claude-max-quota-header');
