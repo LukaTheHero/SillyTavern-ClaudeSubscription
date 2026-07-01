@@ -1,138 +1,334 @@
 // ──────────────────────────────────────────────
-// SillyTavern Server Plugin — Claude (Subscription) Proxy v2
+// Claude Max — UI extension for the claude-subscription server plugin
 // ──────────────────────────────────────────────
 //
-// Exposes an OpenAI-compatible chat-completions API backed by the local
-// Claude Agent SDK, billing against an Anthropic Pro/Max subscription. The
-// chat endpoints run on a *separate* HTTP listener (default 127.0.0.1:8901)
-// so they sit outside SillyTavern's CSRF middleware — see lib/listener.js.
+// This file is the UI EXTENSION (loaded in the browser). The SERVER plugin
+// entry is plugin.js (wired via package.json "main"). Keeping the extension
+// at the repo root with manifest.json makes the repo installable straight
+// from SillyTavern's "Install extension" dialog, AND the server plugin
+// auto-installs these same files — a window guard below makes whichever
+// copy loads second a no-op.
 //
-// v2 additions:
-//   • Companion UI extension ("Claude Max") is auto-installed/updated into
-//     SillyTavern's third-party extensions on startup — it provides one-click
-//     connection (no URL typing), Claude-native reasoning-effort control
-//     (low/medium/high/xhigh/max), thinking display, and a quota meter.
-//   • Fable 5 / Opus 4.8 / explicit "(1M context)" model variants.
-//   • Synthetic-session resume (real multi-turn context + prompt caching).
-//   • OAuth auto-refresh, rate-limit retries, Extra-Usage fallback.
+// Built exclusively on SillyTavern.getContext() — no relative imports — so
+// the file works unchanged from ANY install location (global third-party,
+// per-user data extensions, or the plugin's auto-installed copy).
 //
-// Env overrides:
-//   CLAUDE_SUBSCRIPTION_PORT=8901       listener port
-//   CLAUDE_SUBSCRIPTION_HOST=127.0.0.1  listener host
-//   CLAUDE_SUBSCRIPTION_USE_RESUME=0    force the v1 transcript-fold path
-//   CLAUDE_SUBSCRIPTION_MAX_TURNS=N     SDK maxTurns override (default 1)
-//   CLAUDE_SUBSCRIPTION_CLAUDE_PATH=…   explicit claude executable
-//   CLAUDE_SUBSCRIPTION_NO_UI_INSTALL=1 skip the UI-extension auto-install
+// What it does:
+//   • One-click Connect: pilots SillyTavern's Custom (OpenAI-compatible)
+//     source at the plugin's local endpoint — no URL typing. The endpoint
+//     and key are set BEFORE the source switch because ST's change handler
+//     auto-reconnects immediately with whatever URL is current.
+//   • Claude-native settings (effort low..max, thinking mode, reasoning
+//     display, identity mode, session resume) injected per-request through
+//     `custom_include_body` — the only channel ST's backend forwards
+//     unconditionally for Custom sources. ST's own Reasoning Effort dropdown
+//     is bypassed entirely (it downgrades max→high client-side and drops the
+//     field for Claude model IDs server-side); leave it on "Auto".
+//   • Quota meter: same-origin plugin route first (works from remote
+//     browsers), direct listener fallback.
+//
+// Injection is scoped: it only fires when the active connection actually
+// points at this plugin's endpoint, so other Custom endpoints (Meridian,
+// llama.cpp, etc.) are untouched.
 
-import express from 'express';
-import { cpSync, existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-import { handleStatus } from './lib/status.js';
-import { handleQuota } from './lib/oauth.js';
-import { startStandaloneListener, stopStandaloneListener } from './lib/listener.js';
-
-const DEFAULT_PORT = 8901;
-const DEFAULT_HOST = '127.0.0.1';
-const UI_EXTENSION_DIR_NAME = 'SillyTavern-ClaudeMax';
-
-export const info = {
-    id: 'claude-subscription',
-    name: 'Claude (Subscription) Proxy',
-    description:
-        'Routes chat through the local Claude Agent SDK so it bills against your Anthropic Pro / Max ' +
-        'subscription instead of an sk-ant-* API key. Fable 5 / Opus 4.8 / 1M context / reasoning ' +
-        'effort / thinking display / quota meter. Pairs with the auto-installed "Claude Max" UI extension.',
-};
-
-/** true if dotted version a is strictly newer than b (numeric compare). */
-function isNewerVersion(a, b) {
-    const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
-    const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-        const x = pa[i] ?? 0;
-        const y = pb[i] ?? 0;
-        if (x !== y) return x > y;
+(function () {
+    if (window.__claudeMaxUiLoaded) {
+        console.log('[claude-max] another copy of the Claude Max extension is already active — this one will stay dormant');
+        return;
     }
-    return false;
-}
+    window.__claudeMaxUiLoaded = true;
 
-/**
- * Install or update the companion UI extension into SillyTavern's
- * third-party extensions directory. The plugin runs in-process inside
- * SillyTavern (plugins/<id>/), so the public directory is two levels up.
- * Version-gated: only copies when missing or strictly older — a manually
- * updated (newer) extension is never downgraded.
- */
-function installUiExtension() {
-    if (/^(1|true|yes|on)$/i.test(process.env.CLAUDE_SUBSCRIPTION_NO_UI_INSTALL ?? '')) return;
+    const ctx = SillyTavern.getContext();
+    const { eventSource, eventTypes, extensionSettings, saveSettingsDebounced } = ctx;
 
-    try {
-        const here = dirname(fileURLToPath(import.meta.url));
-        const source = join(here, 'extension');
-        if (!existsSync(join(source, 'manifest.json'))) return;
+    const MODULE = 'claude_max';
+    const DEFAULT_ENDPOINT = 'http://127.0.0.1:8901/v1';
 
-        const stRoot = resolve(here, '..', '..');
-        const thirdParty = join(stRoot, 'public', 'scripts', 'extensions', 'third-party');
-        if (!existsSync(thirdParty)) {
-            console.warn(`[${info.id}] SillyTavern third-party extension dir not found at ${thirdParty} — install the UI extension manually (see README).`);
-            return;
+    const VALID_EFFORTS = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
+    const VALID_THINKING = ['adaptive', 'on', 'off'];
+
+    const defaultSettings = {
+        enabled: true,
+        endpoint: DEFAULT_ENDPOINT,
+        effort: 'auto',          // 'auto' = don't send → model default
+        thinking: 'adaptive',
+        showReasoning: true,
+        identityMode: false,
+        useResume: true,
+    };
+
+    function getSettings() {
+        if (extensionSettings[MODULE] === undefined) {
+            extensionSettings[MODULE] = structuredClone(defaultSettings);
         }
+        for (const key in defaultSettings) {
+            if (extensionSettings[MODULE][key] === undefined) {
+                extensionSettings[MODULE][key] = defaultSettings[key];
+            }
+        }
+        return extensionSettings[MODULE];
+    }
 
-        const target = join(thirdParty, UI_EXTENSION_DIR_NAME);
-        const srcVersion = JSON.parse(readFileSync(join(source, 'manifest.json'), 'utf8')).version ?? '0.0.0';
-        let installedVersion = null;
-        if (existsSync(join(target, 'manifest.json'))) {
+    function normalizeEndpoint(url) {
+        return String(url ?? '').trim().replace(/\/+$/, '');
+    }
+
+    function isOurEndpoint(customUrl, settings) {
+        const a = normalizeEndpoint(customUrl);
+        const b = normalizeEndpoint(settings.endpoint);
+        return a !== '' && a === b;
+    }
+
+    // ── One-click connect (same selector path as ST's /api-url command) ──
+
+    function connect(settings) {
+        try {
+            $('#main_api').val('openai').trigger('change');
+            // Endpoint + key MUST be set before the source change: ST's
+            // change handler auto-reconnects immediately, and firing it with
+            // the stale custom_url would race a status check against the
+            // wrong endpoint.
+            $('#custom_api_url_text').val(settings.endpoint).trigger('input');
+            const keyField = $('#api_key_custom');
+            if (keyField.length && !String(keyField.val() ?? '').trim()) {
+                keyField.val('sk-no-key-needed');
+            }
+            $('#chat_completion_source').val('custom').trigger('change');
+            $('#api_button_openai').trigger('click');
+            toastr?.success?.('Connecting to Claude Max — the model list will populate in a moment.', 'Claude Max');
+        } catch (err) {
+            console.error('[claude-max] connect failed', err);
+            toastr?.error?.(String(err), 'Claude Max');
+        }
+    }
+
+    // ── Per-request injection (CHAT_COMPLETION_SETTINGS_READY) ──
+
+    function buildIncludeBodyYaml(settings) {
+        const lines = ['claude_subscription:'];
+        if (settings.effort !== 'auto') lines.push(`  effort: ${settings.effort}`);
+        lines.push(`  thinking: ${settings.thinking}`);
+        lines.push(`  show_reasoning: ${settings.showReasoning}`);
+        lines.push(`  identity_mode: ${settings.identityMode}`);
+        lines.push(`  use_resume: ${settings.useResume}`);
+        return lines.join('\n');
+    }
+
+    function onSettingsReady(data) {
+        try {
+            const settings = getSettings();
+            if (!settings.enabled) return;
+            if (!data || data.chat_completion_source !== 'custom') return;
+            if (!isOurEndpoint(data.custom_url, settings)) return;
+
+            const existing = typeof data.custom_include_body === 'string' ? data.custom_include_body : '';
+            const cleaned = existing
+                .replace(/^claude_subscription:[\s\S]*?(?=^\S|\s*$(?![\s\S]))/m, '')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            data.custom_include_body = (cleaned ? cleaned + '\n' : '') + buildIncludeBodyYaml(settings);
+        } catch (err) {
+            console.error('[claude-max] failed to inject settings', err);
+        }
+    }
+
+    // ── Quota meter ──
+
+    const WINDOW_LABELS = {
+        five_hour: '5-hour window',
+        seven_day: '7-day (all models)',
+        seven_day_opus: '7-day (Opus)',
+        seven_day_sonnet: '7-day (Sonnet)',
+        seven_day_oauth_apps: '7-day (apps)',
+    };
+
+    async function refreshQuota() {
+        const settings = getSettings();
+        const box = document.getElementById('claude_max_quota');
+        if (!box) return;
+        box.textContent = 'Loading…';
+        try {
+            // Same-origin ST plugin route first — a direct fetch to the
+            // listener resolves 127.0.0.1 to the CLIENT device and fails
+            // whenever the ST UI is opened from a phone or another PC.
+            let res = null;
             try {
-                installedVersion = JSON.parse(readFileSync(join(target, 'manifest.json'), 'utf8')).version ?? '0.0.0';
-            } catch { /* corrupted manifest → reinstall */ }
+                res = await fetch('/api/plugins/claude-subscription/quota', { signal: AbortSignal.timeout(12000) });
+            } catch { /* ST route unavailable — fall back below */ }
+            if (!res || !res.ok) {
+                const base = normalizeEndpoint(settings.endpoint).replace(/\/v1$/, '');
+                res = await fetch(`${base}/v1/usage/quota`, { signal: AbortSignal.timeout(12000) });
+            }
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            box.innerHTML = '';
+            if (!data.windows?.length) {
+                box.textContent = 'No quota data returned.';
+                return;
+            }
+            for (const w of data.windows) {
+                const pct = w.utilization !== null ? Math.round(w.utilization * 100) : null;
+                const row = document.createElement('div');
+                row.classList.add('claude-max-quota-row');
+                const label = document.createElement('span');
+                label.textContent = WINDOW_LABELS[w.type] ?? w.type;
+                const bar = document.createElement('div');
+                bar.classList.add('claude-max-quota-bar');
+                const fill = document.createElement('div');
+                fill.classList.add('claude-max-quota-fill');
+                fill.style.width = `${Math.min(100, pct ?? 0)}%`;
+                if ((pct ?? 0) >= 90) fill.classList.add('critical');
+                else if ((pct ?? 0) >= 70) fill.classList.add('warning');
+                bar.append(fill);
+                const value = document.createElement('span');
+                const resets = w.resetsAt ? ` · resets ${new Date(w.resetsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+                value.textContent = pct !== null ? `${pct}%${resets}` : `–${resets}`;
+                row.append(label, bar, value);
+                box.append(row);
+            }
+            if (data.extraUsage?.isEnabled) {
+                const extra = document.createElement('div');
+                extra.classList.add('claude-max-quota-extra');
+                extra.textContent = `Extra Usage: ${data.extraUsage.usedCredits} / ${data.extraUsage.monthlyLimit} ${data.extraUsage.currency}`;
+                box.append(extra);
+            }
+        } catch (err) {
+            box.textContent = `Quota unavailable (${err instanceof Error ? err.message : err}). Is the server plugin running?`;
         }
-
-        if (installedVersion !== null && !isNewerVersion(srcVersion, installedVersion)) return;
-
-        cpSync(source, target, { recursive: true });
-        console.log(
-            `[${info.id}] ${installedVersion ? `updated UI extension ${installedVersion} → ${srcVersion}` : `installed UI extension v${srcVersion}`} ` +
-            `at public/scripts/extensions/third-party/${UI_EXTENSION_DIR_NAME} (hard-refresh the browser to load it)`,
-        );
-    } catch (err) {
-        console.warn(`[${info.id}] UI extension auto-install failed:`, err instanceof Error ? err.message : err);
     }
-}
 
-export async function init(router) {
-    // SillyTavern-mounted routes (GET is CSRF-exempt): /status for browser
-    // health checks, /quota so the UI extension can read quota SAME-ORIGIN —
-    // a direct browser fetch to 127.0.0.1:8901 resolves to the CLIENT device
-    // and fails whenever SillyTavern is browsed from a phone/another PC.
-    router.use(express.json({ limit: '50mb' }));
-    router.get('/status', handleStatus);
-    router.get('/quota', handleQuota);
+    // ── Settings UI ──
 
-    installUiExtension();
-
-    const port = parseInt(process.env.CLAUDE_SUBSCRIPTION_PORT, 10) || DEFAULT_PORT;
-    const host = process.env.CLAUDE_SUBSCRIPTION_HOST || DEFAULT_HOST;
-
-    try {
-        await startStandaloneListener({ port, host });
-        console.log(
-            `[${info.id}] initialised — endpoint http://${host}:${port}/v1 ` +
-            '(use the "Claude Max" panel in the Extensions drawer to connect)',
-        );
-    } catch (err) {
-        console.error(
-            `[${info.id}] failed to start standalone listener — chat completions will not work. ` +
-            'Status endpoint on /api/plugins/claude-subscription/status remains available.',
-            err,
-        );
+    function makeSelectRow(labelText, id, values, current, onChange, labels = {}) {
+        const label = document.createElement('label');
+        label.htmlFor = id;
+        label.textContent = labelText;
+        label.classList.add('claude-max-label');
+        const select = document.createElement('select');
+        select.id = id;
+        select.classList.add('text_pole');
+        for (const v of values) {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = labels[v] ?? v;
+            if (v === current) opt.selected = true;
+            select.append(opt);
+        }
+        select.addEventListener('change', () => onChange(select.value));
+        return [label, select];
     }
-}
 
-export async function exit() {
-    await stopStandaloneListener();
-    console.log(`[${info.id}] shut down`);
-}
+    function makeCheckboxRow(labelText, id, checked, onChange, hint) {
+        const wrap = document.createElement('label');
+        wrap.classList.add('checkbox_label');
+        wrap.htmlFor = id;
+        const box = document.createElement('input');
+        box.id = id;
+        box.type = 'checkbox';
+        box.checked = checked;
+        box.addEventListener('change', () => onChange(box.checked));
+        const text = document.createElement('span');
+        text.textContent = labelText;
+        if (hint) text.title = hint;
+        wrap.append(box, text);
+        return wrap;
+    }
 
-export default { info, init, exit };
+    function addExtensionSettings(settings) {
+        const container = document.getElementById('extensions_settings') ?? document.body;
+
+        const drawer = document.createElement('div');
+        drawer.classList.add('inline-drawer');
+        container.append(drawer);
+
+        const toggle = document.createElement('div');
+        toggle.classList.add('inline-drawer-toggle', 'inline-drawer-header');
+        const title = document.createElement('b');
+        title.textContent = 'Claude Max';
+        const icon = document.createElement('div');
+        icon.classList.add('inline-drawer-icon', 'fa-solid', 'fa-circle-chevron-down', 'down');
+        toggle.append(title, icon);
+
+        const content = document.createElement('div');
+        content.classList.add('inline-drawer-content');
+        drawer.append(toggle, content);
+
+        const connectBtn = document.createElement('div');
+        connectBtn.classList.add('menu_button', 'claude-max-connect');
+        connectBtn.textContent = 'Connect to Claude Max';
+        connectBtn.title = 'Switches the API to Chat Completion → Custom and points it at the local Claude subscription proxy. Pick a model from the regular model dropdown afterwards.';
+        connectBtn.addEventListener('click', () => connect(getSettings()));
+        content.append(connectBtn);
+
+        const endpointLabel = document.createElement('label');
+        endpointLabel.classList.add('claude-max-label');
+        endpointLabel.textContent = 'Endpoint (advanced)';
+        const endpointInput = document.createElement('input');
+        endpointInput.type = 'text';
+        endpointInput.classList.add('text_pole');
+        endpointInput.value = settings.endpoint;
+        endpointInput.addEventListener('input', () => {
+            settings.endpoint = endpointInput.value || DEFAULT_ENDPOINT;
+            saveSettingsDebounced();
+        });
+        content.append(endpointLabel, endpointInput);
+
+        content.append(makeCheckboxRow('Enabled (inject Claude settings into requests)', 'claudeMaxEnabled', settings.enabled, (v) => {
+            settings.enabled = v; saveSettingsDebounced();
+        }));
+
+        const [effortLabel, effortSelect] = makeSelectRow(
+            'Reasoning effort (Claude-native)', 'claudeMaxEffort', VALID_EFFORTS, settings.effort,
+            (v) => { settings.effort = VALID_EFFORTS.includes(v) ? v : 'auto'; saveSettingsDebounced(); },
+            { auto: 'Auto (model default)', xhigh: 'xhigh (deeper)', max: 'max (deepest)' },
+        );
+        content.append(effortLabel, effortSelect);
+
+        const [thinkLabel, thinkSelect] = makeSelectRow(
+            'Thinking mode', 'claudeMaxThinking', VALID_THINKING, settings.thinking,
+            (v) => { settings.thinking = VALID_THINKING.includes(v) ? v : 'adaptive'; saveSettingsDebounced(); },
+            { adaptive: 'Adaptive (model decides — recommended)', on: 'Always on', off: 'Off (ignored by always-thinking models)' },
+        );
+        content.append(thinkLabel, thinkSelect);
+
+        content.append(makeCheckboxRow('Show reasoning (collapsible thinking box)', 'claudeMaxShowReasoning', settings.showReasoning, (v) => {
+            settings.showReasoning = v; saveSettingsDebounced();
+        }, 'Streams thinking as reasoning_content. Also enable "Show model thoughts" in ST settings.'));
+
+        content.append(makeCheckboxRow('Identity mode (Claude Code preamble)', 'claudeMaxIdentity', settings.identityMode, (v) => {
+            settings.identityMode = v; saveSettingsDebounced();
+        }, 'Keeps the coding system prompt so the model self-identifies correctly. Costs tokens and adds coding framing — leave OFF for roleplay.'));
+
+        content.append(makeCheckboxRow('Session resume (multi-turn context + caching)', 'claudeMaxResume', settings.useResume, (v) => {
+            settings.useResume = v; saveSettingsDebounced();
+        }, 'Replays chat history as a real Claude session instead of one folded string. Disable only for troubleshooting.'));
+
+        const quotaHeader = document.createElement('div');
+        quotaHeader.classList.add('claude-max-quota-header');
+        const quotaTitle = document.createElement('b');
+        quotaTitle.textContent = 'Subscription quota';
+        const quotaRefresh = document.createElement('div');
+        quotaRefresh.classList.add('menu_button', 'fa-solid', 'fa-rotate', 'claude-max-quota-refresh');
+        quotaRefresh.title = 'Refresh quota';
+        quotaRefresh.addEventListener('click', refreshQuota);
+        quotaHeader.append(quotaTitle, quotaRefresh);
+        const quotaBox = document.createElement('div');
+        quotaBox.id = 'claude_max_quota';
+        quotaBox.textContent = 'Press refresh to load.';
+        content.append(quotaHeader, quotaBox);
+
+        const hint = document.createElement('small');
+        hint.classList.add('claude-max-hint');
+        hint.textContent = 'Set SillyTavern\'s native "Reasoning Effort" dropdown to Auto — this panel replaces it for Claude ' +
+            '(the native one downgrades Maximum to "high" and is dropped for Claude models anyway). ' +
+            'Temperature/Top-P are not supported on the subscription path (Agent SDK limitation).';
+        content.append(hint);
+    }
+
+    // ── Boot ──
+
+    const settings = getSettings();
+    addExtensionSettings(settings);
+    eventSource.on(eventTypes.CHAT_COMPLETION_SETTINGS_READY, onSettingsReady);
+    console.log('[claude-max] UI extension loaded');
+})();

@@ -66,7 +66,7 @@ npm install
 Restart SillyTavern. The server log should show:
 
 ```
-[claude-subscription] installed UI extension v2.0.0 at public/scripts/extensions/third-party/SillyTavern-ClaudeMax
+[claude-subscription] installed UI extension v2.0.1 at public/scripts/extensions/third-party/SillyTavern-ClaudeMax
 [claude-subscription] standalone listener: http://127.0.0.1:8901/v1
 [claude-subscription] initialised — endpoint http://127.0.0.1:8901/v1
 ```
@@ -74,7 +74,19 @@ Restart SillyTavern. The server log should show:
 > The companion **Claude Max** UI extension is installed/updated
 > automatically on startup. Hard-refresh the browser (Ctrl+F5) after the
 > first install so SillyTavern loads it. Opt out with
-> `CLAUDE_SUBSCRIPTION_NO_UI_INSTALL=1` and copy `extension/` manually.
+> `CLAUDE_SUBSCRIPTION_NO_UI_INSTALL=1`.
+
+### Alternative: install the panel via the extension dialog
+
+The repo doubles as a regular UI extension (`manifest.json` at the root), so
+the **Claude Max panel** can also be installed from **Extensions → Install
+extension** by pasting the same GitHub URL. The auto-installer detects a
+dialog-installed copy and stands down (and a runtime guard dedupes if both
+ever load).
+
+> ⚠️ The dialog installs **only the panel**. The **server plugin** (the
+> actual proxy) must still be installed into `plugins/` as above — without
+> it, Connect has nothing to connect to.
 
 ## Connect
 
