@@ -7,11 +7,8 @@ mechanism VS Code, Cursor, and Zed use — and ships with a companion
 **"Claude Max" UI extension** for one-click connection and Claude-native
 settings.
 
-<img width="922" height="351" alt="Screenshot 2026-07-01 200311" src="https://github.com/user-attachments/assets/a5fe4756-26b2-4555-9046-adfecdabc13c" />
-<img width="1885" height="1573" alt="Screenshot 2026-07-01 200241" src="https://github.com/user-attachments/assets/bb6dddb6-8110-4935-b31b-227744490ff0" />
-<img width="1909" height="1276" alt="Screenshot 2026-07-01 195334" src="https://github.com/user-attachments/assets/be0fcf25-190b-4f9b-b0d2-d0acea3a7eb9" />
-<img width="954" height="1736" alt="Screenshot 2026-07-01 195136" src="https://github.com/user-attachments/assets/303cdd3f-1ba2-40d0-9ddb-3b2e19b9460d" />
-<img width="949" height="311" alt="Screenshot 2026-07-01 200414" src="https://github.com/user-attachments/assets/ea745dd8-04db-4b5f-901c-f9112d7f273e" />
+<img width="954" height="1736" alt="Screenshot 2026-07-01 195136" src="https://github.com/user-attachments/assets/34199be7-9d69-402e-ac98-8589ab40c955" />
+
 
 [sdk]: https://docs.anthropic.com/en/docs/claude-code/sdk
 
