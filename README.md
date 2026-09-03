@@ -14,7 +14,7 @@ settings.
 
 ## What v2 gives you
 
-- **Current models** — Claude Fable 5, Opus 4.8/4.7/4.6/4.5, Sonnet 4.6/4.5,
+- **Current models** — Claude Fable 5.1/5, Opus 5/4.8/4.7/4.6/4.5, Sonnet 4.6/4.5,
   Haiku 4.5, plus explicit **"(1M context)"** variants for the tiers that
   support extended context.
 - **One-click connect** — the Claude Max panel (Extensions drawer) configures
@@ -38,7 +38,7 @@ settings.
 - **Resilience** — automatic OAuth token refresh, rate-limit retries,
   1M-context → base-model fallback with a one-hour probe cooldown.
 - **Served-model guard** — an explicit Fable request is NEVER silently
-  substituted: if the upstream resolves your `claude-fable-5` pick to
+  substituted: if the upstream resolves your `claude-fable-5-1` or `claude-fable-5` pick to
   anything else (e.g. Fable temporarily disabled on your plan), the request
   errors out with a clear message instead of quietly switching to Opus
   mid-roleplay.
@@ -100,8 +100,8 @@ ever load).
 
 1. Open the **Extensions** drawer → **Claude Max**.
 2. Click **Connect to Claude Max**.
-3. Pick a model from the normal model dropdown (e.g. *Claude Fable 5* or
-   *Claude Opus 4.8 (1M context)*).
+3. Pick a model from the normal model dropdown (e.g. *Claude Fable 5.1* or
+   *Claude Opus 5 (1M context)*).
 4. Chat.
 
 Set effort/thinking in the same panel — changes apply from the next message,
@@ -112,7 +112,7 @@ no reconnect needed.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Reasoning effort | Auto | How hard Claude reasons before replying, `low → max`. Auto sends nothing (model default, ≈high). Higher = better consistency on complex scenes, slower replies, more quota. |
-| Thinking mode | Adaptive | Whether extended thinking happens at all. **Adaptive**: model thinks only when the message warrants it. **Always on**: every reply. **Off**: none — except Fable 5 / Opus 4.7+ *always* think (can't be disabled), and thinking is auto-disabled on other models when Max response length < 2048 tokens. |
+| Thinking mode | Adaptive | Whether extended thinking happens at all. **Adaptive**: model thinks only when the message warrants it. **Always on**: every reply. **Off**: none — except Fable 5/5.1 and Opus 4.7+ / Opus 5 *always* think (can't be disabled), and thinking is auto-disabled on other models when Max response length < 2048 tokens. |
 | Show reasoning | On | **Display only** — doesn't change whether thinking happens. On: the thinking summary streams into ST's collapsible "thoughts" box (enable "Show model thoughts" in ST too). Never added to chat history or re-sent as context. |
 | Identity mode | Off | Off: your character card is the *entire* system prompt. On: prepends Anthropic's Claude Code preamble (the framing the `claude` CLI uses) — fixes model self-identification ("are you Opus or Sonnet?") at the cost of extra tokens and a coding-assistant flavor. Leave off for RP. |
 | Session resume | On | How history reaches Claude. On: replayed as a real multi-turn session — better turn awareness, working prompt caching (faster + less quota burned re-reading context); swipes/edits handled naturally. Off: history flattened to one `User:/Assistant:` text block (troubleshooting only). |
@@ -159,7 +159,7 @@ Direct API users: the plugin accepts the standard `reasoning_effort` body
 field, or a `claude_subscription: { effort, thinking, thinking_budget,
 show_reasoning, identity_mode, use_resume }` object for full control.
 `thinking_budget` (tokens) only applies when `thinking: "on"` and the model
-is not adaptive-only (Opus 4.7+/Fable ignore it); it is clamped to ≥ 1024
+is not adaptive-only (Opus 4.7+/Opus 5/Fable ignore it); it is clamped to ≥ 1024
 and ≤ `max_tokens − 512`.
 
 ## API-billing fallback (optional)

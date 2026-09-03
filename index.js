@@ -139,6 +139,7 @@
         seven_day: '7-day (all models)',
         seven_day_opus: '7-day (Opus)',
         seven_day_sonnet: '7-day (Sonnet)',
+        seven_day_fable: '7-day (Fable)',
         seven_day_oauth_apps: '7-day (apps)',
     };
 
@@ -313,7 +314,7 @@
         content.append(makeHelp(
             'Whether Claude uses extended thinking at all. Adaptive: the model thinks only when a message ' +
             'warrants it — no latency tax on simple exchanges. Always on: every reply is preceded by thinking. ' +
-            'Off: no thinking (note: Fable 5 and Opus 4.7+ ALWAYS think — this setting can\'t disable it there, ' +
+            'Off: no thinking (note: Fable 5/5.1 and Opus 4.7+ ALWAYS think — this setting can\'t disable it there, ' +
             'and thinking is auto-disabled on other models when Max response length is under 2048 tokens).',
         ));
 

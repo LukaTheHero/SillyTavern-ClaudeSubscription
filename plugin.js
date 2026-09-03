@@ -12,7 +12,7 @@
 //     SillyTavern's third-party extensions on startup — it provides one-click
 //     connection (no URL typing), Claude-native reasoning-effort control
 //     (low/medium/high/xhigh/max), thinking display, and a quota meter.
-//   • Fable 5 / Opus 4.8 / explicit "(1M context)" model variants.
+//   • Fable 5.1 / Opus 5 / explicit "(1M context)" model variants.
 //   • Synthetic-session resume (real multi-turn context + prompt caching).
 //   • OAuth auto-refresh, rate-limit retries, Extra-Usage fallback.
 //
@@ -42,7 +42,7 @@ export const info = {
     name: 'Claude (Subscription) Proxy',
     description:
         'Routes chat through the local Claude Agent SDK so it bills against your Anthropic Pro / Max ' +
-        'subscription instead of an sk-ant-* API key. Fable 5 / Opus 4.8 / 1M context / reasoning ' +
+        'subscription instead of an sk-ant-* API key. Fable 5.1 / Opus 5 / 1M context / reasoning ' +
         'effort / thinking display / quota meter. Pairs with the auto-installed "Claude Max" UI extension.',
 };
 
